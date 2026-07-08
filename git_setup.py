@@ -1,10 +1,13 @@
 # git_setup_frame.py
+import requests
 import wx
 import subprocess
 from pathlib import Path
 from test_push import run
 import os
 import json
+from widgets import MyStaticBox
+from embedded_images import _switcher_3d_red, _switcher_3d_green, _switcher_3d_1
 
 # Цвета (дублируем, если не импортировать из основного модуля)
 DARK_BG = wx.Colour(30, 30, 30)
@@ -15,6 +18,8 @@ GIT_GREEN = wx.Colour(40, 167, 69)
 GIT_RED = wx.Colour(220, 53, 69)
 GIT_BLUE = wx.Colour(14, 99, 156)
 GITHUB_TOKEN_FILE = "github_token.txt"
+# Путь к файлу с сохранённым токеном (в домашней директории)
+TOKEN_FILE = Path.home() / ".config" / "git_changelog" / "token.json"
 class GitSetupFrame(wx.Frame):
     def __init__(self, parent):
         super().__init__(parent, title="⚙️ Настройка Git-репозитория", size=(700, 600),
@@ -30,6 +35,52 @@ class GitSetupFrame(wx.Frame):
             self.SetForegroundColour(TEXT_LIGHT)
 
         main_sizer = wx.BoxSizer(wx.VERTICAL)
+        # desc = wx.StaticText(panel, label="Создайте репозиторий на GitHub и настройте локальный Git.")
+        desc_box = MyStaticBox(panel, label="Создайте репозиторий на GitHub и настройте локальный Git.")
+        main_sizer.Add(desc_box, 0, wx.EXPAND|wx.ALL, 10)
+        # --- GitHub Token ---
+        token_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        token_sizer.Add(wx.StaticText(panel, label="GitHub Token:"), 0, wx.ALIGN_CENTER | wx.RIGHT, 5)
+        self.token_ctrl = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
+        self.token_ctrl.SetToolTip("GitHub Personal Access Token (repo scope)")
+        token_sizer.Add(self.token_ctrl, 1, wx.EXPAND)
+        load_token_btn = wx.Button(panel, label="📂 Загрузить из файла", size=(140, -1))
+        load_token_btn.Bind(wx.EVT_BUTTON, self.on_load_token)
+        token_sizer.Add(load_token_btn, 0, wx.LEFT, 5)
+        desc_box.Add(token_sizer, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+
+        # --- Owner / Repo Name ---
+        repo_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        repo_sizer.Add(wx.StaticText(panel, label="Owner/Repo:"), 0, wx.ALIGN_CENTER | wx.RIGHT, 5)
+        self.repo_ctrl = wx.TextCtrl(panel, value="user/myproject")
+        self.repo_ctrl.SetToolTip("Формат: owner/repo-name (например, AlexDavydov357/Git_Changelog_Tool)")
+        repo_sizer.Add(self.repo_ctrl, 1, wx.EXPAND)
+        desc_box.Add(repo_sizer, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        self.rep_type_btn = wx.ToggleButton(panel, id=wx.ID_ANY, style=wx.NO_BORDER|wx.BU_EXACTFIT,
+                                                size=(32, 13), name='rep_type_btn')
+        self.rep_type_btn.SetToolTip('Публичный репозиторий')
+        self.rep_type_btn.SetBitmap(_switcher_3d_green.GetBitmap())
+        self.rep_type_btn.SetBitmapPressed(_switcher_3d_red.GetBitmap())
+        self.rep_type_btn.Bind(wx.EVT_TOGGLEBUTTON, self.switch_repo_type)
+
+        self.auto_init_btn = wx.ToggleButton(panel, id=wx.ID_ANY, style=wx.NO_BORDER|wx.BU_EXACTFIT,
+                                                size=(32, 13), name='rep_type_btn')
+        self.auto_init_btn.SetToolTip('Включить авто инит: чтобы GitHub создал README + .gitignore + LICENSE')
+        self.auto_init_btn.SetBitmap(_switcher_3d_1.GetBitmap())
+        self.auto_init_btn.SetBitmapPressed(_switcher_3d_green.GetBitmap())
+        self.auto_init_btn.Bind(wx.EVT_TOGGLEBUTTON, self.switch_repo_type)
+
+        hbox = wx.BoxSizer(wx.HORIZONTAL)
+        # --- Кнопка создания репозитория ---
+        create_repo_btn = wx.Button(panel, label="🚀 Создать репозиторий на GitHub")
+        create_repo_btn.Bind(wx.EVT_BUTTON, self.on_create_repo)
+        hbox.Add(self.rep_type_btn, 0, wx.ALL | wx.ALIGN_CENTER, 10)
+        hbox.Add(self.auto_init_btn, 0, wx.ALL | wx.ALIGN_CENTER, 10)
+        hbox.Add(create_repo_btn, 0, wx.ALL | wx.CENTER, 10)
+        main_sizer.Add(hbox, 0, wx.ALL | wx.CENTER, 10)
+
 
         # --- Лог выполнения ---
         self.log_ctrl = wx.TextCtrl(panel, style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_RICH2)
@@ -76,29 +127,6 @@ class GitSetupFrame(wx.Frame):
         url_check_sizer.Add(self.check_url_btn, 0)
         actions_sizer.Add(url_check_sizer, 0, wx.EXPAND | wx.BOTTOM, 5)
 
-        # --- Создание репозитория на GitHub ---
-        gh_create_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.gh_token = wx.TextCtrl(panel, style=wx.TE_PASSWORD)
-        self.gh_token.SetToolTip("GitHub Personal Access Token (scope: repo)")
-        token = self.load_github_token()
-        if token:
-            self.gh_token.SetValue(token)
-        gh_create_sizer.Add(wx.StaticText(panel, label="GitHub Token:"), 0, wx.ALIGN_CENTER | wx.RIGHT, 5)
-        gh_create_sizer.Add(self.gh_token, 1, wx.EXPAND | wx.RIGHT, 5)
-        # Кнопка сохранения токена
-        self.save_token_btn = wx.Button(panel, label="💾 Сохранить токен")
-        self.save_token_btn.SetToolTip("Сохранить текущий токен в файл github_token.txt")
-        self.save_token_btn.Bind(wx.EVT_BUTTON, self.on_save_token)
-        gh_create_sizer.Add(self.save_token_btn, 0, wx.LEFT, 5)
-
-        self.gh_repo_name = wx.TextCtrl(panel, value="my-new-repo")
-        gh_create_sizer.Add(wx.StaticText(panel, label="Repo Name:"), 0, wx.ALIGN_CENTER | wx.RIGHT, 5)
-        gh_create_sizer.Add(self.gh_repo_name, 1, wx.EXPAND)
-
-        self.create_gh_repo_btn = wx.Button(panel, label="🚀 Создать на GitHub")
-        self.create_gh_repo_btn.Bind(wx.EVT_BUTTON, self.on_create_github_repo)
-        gh_create_sizer.Add(self.create_gh_repo_btn, 0)
-        actions_sizer.Add(gh_create_sizer, 0, wx.EXPAND | wx.BOTTOM, 5)
 
         # 3. Добавить origin
         origin_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -300,43 +328,93 @@ class GitSetupFrame(wx.Frame):
 
         self.log("🎉 Полная настройка завершена!", is_success=True)
 
-    def on_create_github_repo(self, event):
-        """Создаёт репозиторий на GitHub через API"""
-        token = self.gh_token.GetValue().strip()
-        repo_name = self.gh_repo_name.GetValue().strip()
+    def on_create_repo(self, event):
+        """Создаёт репозиторий на GitHub и настраивает локальный Git"""
+        token = self.token_ctrl.GetValue().strip()
+        repo_input = self.repo_ctrl.GetValue().strip()
 
         if not token:
-            self.log("❌ GitHub token не указан", is_error=True)
+            wx.MessageBox("Введите GitHub Personal Access Token", "Ошибка", wx.OK | wx.ICON_WARNING)
             return
-        if not repo_name:
-            self.log("❌ Имя репозитория не указано", is_error=True)
+        if not repo_input or "/" not in repo_input:
+            wx.MessageBox("Введите Owner/Repo в формате: owner/repo-name", "Ошибка", wx.OK | wx.ICON_WARNING)
             return
 
-        import urllib.request
-        import json
+        owner, repo = repo_input.split("/", 1)
+        if not owner or not repo:
+            wx.MessageBox("Некорректный формат Owner/Repo", "Ошибка", wx.OK | wx.ICON_WARNING)
+            return
 
-        url = "https://api.github.com/user/repos"
-        data = json.dumps({"name": repo_name, "private": False}).encode("utf-8")
-
-        req = urllib.request.Request(url, data=data, method="POST")
-        req.add_header("Authorization", f"token {token}")
-        req.add_header("Content-Type", "application/json")
+        self.log(f"🚀 Создание репозитория {owner}/{repo} на GitHub...")
 
         try:
-            with urllib.request.urlopen(req, timeout=15) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                repo_url = result.get("html_url", "неизвестно")
-                self.log(f"✅ Репозиторий создан: {repo_url}", is_success=True)
+            # 1. Создаём репозиторий через GitHub API
+            url = "https://api.github.com/user/repos"
+            headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+            payload = {"name": repo,
+                       "private": self.rep_type_btn.GetValue(),
+                       "license_template": "mit",  # можно сделать private: True
+                       "auto_init": self.auto_init_btn.GetValue()}  #чтобы GitHub создал README + .gitignore + LICENSE
 
-                # Автоматически добавляем origin
-                self.origin_url.SetValue(repo_url.replace("https://github.com/", "https://github.com/"))
-                self.log(f"🔗 URL добавлен в поле `origin`", is_success=True)
 
-        except urllib.error.HTTPError as e:
-            error_body = e.read().decode("utf-8")
-            self.log(f"❌ GitHub API ошибка {e.code}: {error_body}", is_error=True)
+
+            response = requests.post(url, json=payload, headers=headers, timeout=10)
+            if response.status_code == 201:
+                self.log(f"✅ Репозиторий {owner}/{repo} успешно создан на GitHub")
+            elif response.status_code == 422:
+                self.log(f"ℹ️ Репозиторий {owner}/{repo} уже существует", is_error=False)
+            else:
+                raise Exception(f"GitHub API error: {response.status_code}\n{response.text}")
+
+            # 2. Настройка Git
+            cwd = Path.cwd()
+            self.log("📦 Выполняется `git init`...")
+            run(["git", "init"], cwd=cwd)
+            self.log("✅ `git init` завершён")
+
+            self.log("🔄 Переименование ветки `master` → `main`...")
+            run(["git", "branch", "-m", "master", "main"], cwd=cwd)
+            self.log("✅ Ветка переименована")
+
+            # 3. Добавляем remote origin
+            remote_url = f"https://github.com/{owner}/{repo}.git"
+            self.log(f"🔗 Добавление remote `origin`: {remote_url}")
+            run(["git", "remote", "add", "origin", remote_url], cwd=cwd)
+            self.log("✅ `origin` добавлен")
+
+            # 4. Создаём README.md (опционально)
+            readme_path = cwd / "README.md"
+            if not readme_path.exists():
+                readme_path.write_text(f"# {repo}\n\nСоздано через Git Changelog Tool", encoding="utf-8")
+                self.log("📄 Создан README.md")
+
+            # 5. Добавляем и коммитим
+            self.log("📦 Добавление файлов и создание первого коммита...")
+            run(["git", "add", "."], cwd=cwd)
+            run(["git", "commit", "-m", "Initial commit"], cwd=cwd)
+            self.log("✅ Первый коммит создан")
+
+            # 6. Пушим в GitHub
+            self.log("📤 Пуш в `origin/main`...")
+            run(["git", "push", "-u", "origin", "main"], cwd=cwd)
+            self.log("✅ Пуш завершён")
+
+            self.log("🎉 Настройка завершена успешно!")
+            wx.MessageBox(
+                f"✅ Репозиторий {owner}/{repo} создан и настроен!\n"
+                f"URL: https://github.com/{owner}/{repo}",
+                "Успех",
+                wx.OK | wx.ICON_INFORMATION
+            )
+
+        except subprocess.CalledProcessError as e:
+            self.log(f"❌ Ошибка Git: {e.stderr or e.stdout}", is_error=True)
+            wx.MessageBox(f"Ошибка при настройке Git:\n{e.stderr or e.stdout}", "Ошибка Git", wx.OK | wx.ICON_ERROR)
+
         except Exception as e:
-            self.log(f"❌ Ошибка создания репозитория: {e}", is_error=True)
+            self.log(f"❌ Ошибка: {e}", is_error=True)
+            wx.MessageBox(f"Ошибка: {e}", "Ошибка", wx.OK | wx.ICON_ERROR)
+
 
     def on_check_url(self, event):
         """Проверяет доступность URL через git ls-remote"""
@@ -416,6 +494,40 @@ class GitSetupFrame(wx.Frame):
             self.log(f"✅ Токен сохранён в {GITHUB_TOKEN_FILE}", is_success=True)
         except Exception as e:
             self.log(f"❌ Ошибка сохранения токена: {e}", is_error=True)
+
+    def load_saved_token(self):
+        """Загружает токен из файла, если он есть"""
+        if TOKEN_FILE.exists():
+            try:
+                with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    token = data.get("token", "")
+                    if token:
+                        self.token_ctrl.SetValue(token)
+                        self.log("✅ Токен загружен из файла")
+            except Exception as e:
+                self.log(f"⚠️ Ошибка загрузки токена: {e}", is_error=True)
+
+    def on_load_token(self, event):
+        """Открывает диалог выбора файла с токеном"""
+        with wx.FileDialog(
+            self, "Выберите файл с токеном",
+            wildcard="Текстовые файлы (*.txt)|*.txt|Все файлы (*.*)|*.*",
+            style=wx.FD_OPEN | wx.FD_FILE_MUST_EXIST
+        ) as dialog:
+            if dialog.ShowModal() == wx.ID_CANCEL:
+                return
+            path = Path(dialog.GetPath())
+            try:
+                token = path.read_text().strip()
+                self.token_ctrl.SetValue(token)
+                # Сохраняем путь (но не токен!) в конфиг
+                TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+                with open(TOKEN_FILE, "w", encoding="utf-8") as f:
+                    json.dump({"token_path": str(path)}, f, ensure_ascii=False, indent=2)
+                self.log(f"✅ Токен загружен из {path}")
+            except Exception as e:
+                self.log(f"❌ Ошибка чтения файла: {e}", is_error=True)
 
     def autodetect_current_state(self):
         """Автоматически определяет текущую ветку и remote-ы"""
@@ -581,6 +693,12 @@ class GitSetupFrame(wx.Frame):
             self.autodetect_current_state()
         except Exception as e:
             self.log(f"Ошибка: {e}", is_error=True)
+
+    def switch_repo_type(self, e):
+        if self.rep_type_btn.GetValue():
+            self.rep_type_btn.SetToolTip("Приватный репозиторий")
+        else:
+            self.rep_type_btn.SetToolTip("Публичный репозиторий")
 
     def binding_origin_to_main(self):
         """Создаёт локальную ветку main (если нет) и принудительно пушит её на origin/main"""

@@ -385,7 +385,12 @@ class ChangelogFrame(wx.Frame):
         self.commit_btn.Bind(wx.EVT_BUTTON, self.commit)
         git_sizer.Add(self.commit_btn, 0, wx.RIGHT, 10)
 
-
+        self.force_push_checkbox = wx.CheckBox(panel, label="⚡ Первый пуш (force)")
+        self.force_push_checkbox.SetToolTip(
+            "Если репозиторий новый и пустой — включите, чтобы избежать ошибок при первом push"
+        )
+        self.force_push_checkbox.SetValue(False)  # по умолчанию выключен
+        git_sizer.Add(self.force_push_checkbox, 0, wx.ALIGN_CENTER | wx.RIGHT, 10)
 
         self.push_origin_btn = wx.Button(panel, label="⬆️ Push Origin", name="origin")
         self.push_origin_btn.SetToolTip("Пушит в origin")
@@ -794,26 +799,136 @@ class ChangelogFrame(wx.Frame):
                 self.status_bar.SetStatusText("Ошибка коммита")
         dlg.Destroy()
 
-
-
     def on_push(self, event):
-        brunch = event.GetEventObject().GetName()
+        btn_name = event.GetEventObject().GetName()
+        print(f"\n{'=' * 60}")
+        print(f"🚀 on_push: кнопка '{btn_name}' нажата")
+        print(f"cwd: {Path.cwd()}")
+        print(f"force push: {self.force_push_checkbox.IsChecked()}")
+        print(f"{'=' * 60}\n", flush=True)
+
         if not self.is_git_repo():
             wx.MessageBox("Текущая директория не является Git-репозиторием", "Ошибка", wx.OK | wx.ICON_ERROR)
             return
-        if brunch == "backup":
-            cmd = ["git", "push", "backup", "main"]
-        if brunch == "origin":
-            cmd = ["git", "push", "origin", "main"]
+
+        # Определяем, использовать ли force
+        use_force = self.force_push_checkbox.IsChecked()
+
+        # Определяем, какие remote-ы обрабатываем
+        remotes = []
+        if btn_name == "backup":
+            remotes = ["backup"]
+        elif btn_name == "origin":
+            remotes = ["origin"]
+        elif btn_name == "all":
+            remotes = ["origin", "backup"]
         else:
-            cmd = ["git", "push-all"]
+            wx.MessageBox("Неизвестная кнопка push", "Ошибка", wx.OK | wx.ICON_ERROR)
+            return
+
+        for remote in remotes:
+            print(f"📦 Push в `{remote}`...")
+
+            cmd = ["git", "push"]
+            if use_force:
+                cmd.append("-f")
+            cmd.extend([remote, "main"])
+            print(f"📦 Команда: {' '.join(cmd)}")
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                print(f"✅ Push в `{remote}` выполнен")
+                if result.stdout.strip():
+                    print(f"stdout: {result.stdout}")
+                if result.stderr.strip():
+                    print(f"stderr: {result.stderr}")
+            except subprocess.CalledProcessError as e:
+                print(f"❌ Ошибка push в `{remote}`:")
+                print(f"stdout: {e.stdout}")
+                print(f"stderr: {e.stderr}")
+                wx.MessageBox(
+                    f"Ошибка при push в `{remote}`:\n{e.stderr or e.stdout}",
+                    "Ошибка Git",
+                    wx.OK | wx.ICON_ERROR
+                )
+                return  # прерываем, если ошибка
+
+        wx.MessageBox(
+            f"✅ Push в {', '.join(remotes)} выполнен!" +
+            (" (force)" if use_force else ""),
+            "Успех",
+            wx.OK | wx.ICON_INFORMATION
+        )
+        self.status_bar.SetStatusText(f"Push в {', '.join(remotes)} выполнен" + (" (force)" if use_force else ""))
+
+    def on_push_old(self, event):
+        btn_name = event.GetEventObject().GetName()
+        print(f"\n{'=' * 60}")
+        print(f"🚀 on_push: кнопка '{btn_name}' нажата")
+        print(f"cwd: {Path.cwd()}")
+        print(f"{'=' * 60}\n", flush=True)
+
+        if not self.is_git_repo():
+            wx.MessageBox("Текущая директория не является Git-репозиторием", "Ошибка", wx.OK | wx.ICON_ERROR)
+            return
+
+        use_force = self.force_push_checkbox.IsChecked()
+        cmd = []
+        # Формируем команды
+        if btn_name == "backup":
+            remotes = ["backup"]
+        elif btn_name == "origin":
+            remotes = ["origin"]
+        elif btn_name == "all":
+            remotes = ["origin", "backup"]
+        else:
+            wx.MessageBox("Неизвестная кнопка push", "Ошибка", wx.OK | wx.ICON_ERROR)
+            return
+
+        for remote in remotes:
+            cmd = ["git", "push"]
+            if use_force:
+                cmd.append("-f")  # --force
+            cmd.extend([remote, "main"])
+
+        print(f"📦 Команда: {' '.join(cmd)}", flush=True)
+
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            wx.MessageBox("Push успешно выполнен!", "Успех", wx.OK | wx.ICON_INFORMATION)
-            self.status_bar.SetStatusText("Push выполнен")
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True,
+                cwd=Path.cwd()
+            )
+
+            # 🔍 Отладка: выводим всё в консоль
+            print(f"✅ Push завершён успешно (remote: {remote_name})")
+            print(f"stdout:\n{result.stdout}" if result.stdout else "stdout: (пусто)")
+            print(f"stderr:\n{result.stderr}" if result.stderr else "stderr: (пусто)")
+            print(f"returncode: {result.returncode}")
+            print(f"{'=' * 60}\n", flush=True)
+
+            wx.MessageBox(f"✅ Push в `{remote_name}` выполнен!", "Успех", wx.OK | wx.ICON_INFORMATION)
+            self.status_bar.SetStatusText(f"Push в {remote_name} выполнен")
+
         except subprocess.CalledProcessError as e:
-            wx.MessageBox(f"Ошибка при push:\n{e.stderr}", "Ошибка Git", wx.OK | wx.ICON_ERROR)
-            self.status_bar.SetStatusText("Ошибка push")
+            print(f"❌ Ошибка при push (remote: {remote_name})")
+            print(f"returncode: {e.returncode}")
+            print(f"stdout:\n{e.stdout}" if e.stdout else "stdout: (пусто)")
+            print(f"stderr:\n{e.stderr}" if e.stderr else "stderr: (пусто)")
+            print(f"{'=' * 60}\n", flush=True)
+
+            # Показываем пользователю (в GUI)
+            msg = f"Ошибка при push в `{remote_name}`:\n\n"
+            if e.stderr:
+                msg += e.stderr.strip()
+            elif e.stdout:
+                msg += e.stdout.strip()
+            else:
+                msg += "Нет дополнительной информации."
+            wx.MessageBox(msg, "Ошибка Git", wx.OK | wx.ICON_ERROR)
+            self.status_bar.SetStatusText(f"Ошибка push в {remote_name}")
 
     def is_git_repo(self):
         return subprocess.run(["git", "rev-parse", "--git-dir"],
